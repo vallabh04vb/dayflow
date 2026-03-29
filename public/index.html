@@ -143,8 +143,9 @@ function renderTaskPage() {
 
     <div class="add-task-container">
       <input type="text" class="add-task-input" id="add-task-input"
-        placeholder="Add a new task... (press Enter)"
+        placeholder="Add a new task..."
         onkeydown="handleAddTask(event)">
+      <button class="add-task-btn" onclick="addTaskFromInput()">+</button>
     </div>
 
     <div class="actions">
@@ -187,6 +188,17 @@ function escapeHtml(str) {
 }
 
 // --- Task Actions ---
+async function addTaskFromInput() {
+  const input = document.getElementById('add-task-input');
+  const title = input.value.trim();
+  if (!title) return;
+  input.value = '';
+  await api('/api/tasks', { method: 'POST', body: { date: currentDate, title } });
+  await loadTasks(currentDate);
+  renderTaskPage();
+  setTimeout(() => document.getElementById('add-task-input')?.focus(), 50);
+}
+
 async function handleAddTask(e) {
   if (e.key !== 'Enter') return;
   const input = e.target;

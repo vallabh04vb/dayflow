@@ -299,6 +299,9 @@ h1, h2, h3 {
 /* Add task */
 .add-task-container {
   margin-bottom: 24px;
+  display: flex;
+  gap: 10px;
+  align-items: stretch;
 }
 
 .add-task-input {
@@ -323,6 +326,24 @@ h1, h2, h3 {
   border-color: var(--accent);
   background: var(--card);
   box-shadow: var(--shadow);
+}
+
+.add-task-btn {
+  width: 48px;
+  flex-shrink: 0;
+  border: none;
+  border-radius: var(--radius);
+  background: var(--accent);
+  color: white;
+  font-size: 24px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s;
+  font-family: 'DM Sans', sans-serif;
+}
+
+.add-task-btn:hover {
+  background: #B45309;
 }
 
 /* Action buttons */
