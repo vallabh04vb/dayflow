@@ -2,7 +2,9 @@ const initSqlJs = require('sql.js');
 const fs = require('fs');
 const path = require('path');
 
-const dbPath = path.join(__dirname, 'dayflow.db');
+// Use /app/data/ on Railway (persistent volume), fallback to local dir
+const dataDir = fs.existsSync('/app/data') ? '/app/data' : __dirname;
+const dbPath = path.join(dataDir, 'dayflow.db');
 let db;
 
 // Initialize database (must be called before anything else)
