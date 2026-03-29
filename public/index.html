@@ -1,0 +1,685 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DayFlow</title>
+  <link rel="stylesheet" href="/style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌊</text></svg>">
+</head>
+<body>
+  <div class="container" id="app"></div>
+  <div class="toast" id="toast"></div>
+  <div class="modal-backdrop" id="modal-backdrop">
+    <div class="modal" id="modal"></div>
+  </div>
+
+<script>
+// --- State ---
+let currentView = 'today'; // today | tomorrow | settings | history | setup
+let currentDate = todayStr();
+let tasks = [];
+let stats = { total: 0, done: 0, percentage: 0 };
+let streak = 0;
+let draggedId = null;
+let historyMonth = new Date();
+let selectedHistoryDate = null;
+
+// --- Helpers ---
+function todayStr() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+
+function tomorrowStr() {
+  const d = new Date();
+  d.setDate(d.getDate() + 1);
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+
+function formatDateDisplay(dateStr) {
+  const d = new Date(dateStr + 'T12:00:00');
+  return d.toLocaleDateString('en-IN', { weekday: 'long', month: 'long', day: 'numeric' });
+}
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2000);
+}
+
+// --- API ---
+async function api(url, opts = {}) {
+  const res = await fetch(url, {
+    headers: { 'Content-Type': 'application/json' },
+    ...opts,
+    body: opts.body ? JSON.stringify(opts.body) : undefined
+  });
+  return res.json();
+}
+
+async function loadTasks(date) {
+  const data = await api(`/api/tasks/${date}`);
+  tasks = data.tasks;
+  stats = data.stats;
+  streak = data.streak;
+}
+
+// --- Router ---
+async function navigate(path) {
+  // Check setup status first
+  if (path !== 'setup') {
+    const status = await api('/api/setup-status');
+    if (!status.complete) {
+      path = 'setup';
+    }
+  }
+
+  if (path === 'today' || path === '') {
+    currentView = 'today';
+    currentDate = todayStr();
+    await loadTasks(currentDate);
+    renderTaskPage();
+  } else if (path === 'tomorrow') {
+    currentView = 'tomorrow';
+    currentDate = tomorrowStr();
+    await loadTasks(currentDate);
+    renderTaskPage();
+  } else if (path === 'settings') {
+    currentView = 'settings';
+    renderSettings();
+  } else if (path === 'history') {
+    currentView = 'history';
+    renderHistory();
+  } else if (path === 'setup') {
+    currentView = 'setup';
+    renderSetup();
+  }
+
+  // Update URL
+  const urlPath = path === 'today' || path === '' ? '/' : `/${path}`;
+  if (window.location.pathname !== urlPath) {
+    history.pushState({}, '', urlPath);
+  }
+}
+
+window.addEventListener('popstate', () => {
+  const path = window.location.pathname.slice(1) || 'today';
+  navigate(path);
+});
+
+// --- Render: Task Page ---
+function renderTaskPage() {
+  const app = document.getElementById('app');
+  const isToday = currentView === 'today';
+
+  app.innerHTML = `
+    ${renderNav()}
+    <div class="date-header">
+      <h1>${formatDateDisplay(currentDate)}</h1>
+      <p class="subtitle">${isToday ? "Let's make today count" : "Planning ahead"}</p>
+    </div>
+
+    <div class="day-tabs">
+      <button class="day-tab ${isToday ? 'active' : ''}" onclick="navigate('today')">Today</button>
+      <button class="day-tab ${!isToday ? 'active' : ''}" onclick="navigate('tomorrow')">Tomorrow</button>
+    </div>
+
+    <div class="stats-bar">
+      <span class="stats-progress">${stats.done}/${stats.total} tasks done ${stats.percentage === 100 && stats.total > 0 ? '🔥' : ''}</span>
+      <span class="stats-streak">${streak > 0 ? `Day ${streak} streak 🎯` : 'Start your streak!'}</span>
+    </div>
+
+    <div class="progress-bar-container">
+      <div class="progress-bar">
+        <div class="progress-bar-fill" style="width:${stats.percentage}%"></div>
+      </div>
+    </div>
+
+    <ul class="task-list" id="task-list">
+      ${tasks.map(renderTaskItem).join('')}
+    </ul>
+
+    <div class="add-task-container">
+      <input type="text" class="add-task-input" id="add-task-input"
+        placeholder="Add a new task... (press Enter)"
+        onkeydown="handleAddTask(event)">
+    </div>
+
+    <div class="actions">
+      ${isToday ? `<button class="btn btn-primary" onclick="openPlanTomorrow()">Plan Tomorrow</button>` : ''}
+      ${isToday ? `<button class="btn btn-secondary" onclick="copyTodayToTomorrow()">Copy Today → Tomorrow</button>` : ''}
+    </div>
+  `;
+
+  initDragAndDrop();
+}
+
+function renderTaskItem(task) {
+  return `
+    <li class="task-item ${task.completed ? 'completed' : ''}"
+        draggable="true"
+        data-id="${task.id}"
+        ondragstart="onDragStart(event, ${task.id})"
+        ondragover="onDragOver(event)"
+        ondragenter="onDragEnter(event)"
+        ondragleave="onDragLeave(event)"
+        ondrop="onDrop(event, ${task.id})"
+        ondragend="onDragEnd(event)">
+      ${task.carried_over ? '<span class="task-carried-over">🔄</span>' : ''}
+      <label class="task-checkbox">
+        <input type="checkbox" ${task.completed ? 'checked' : ''}
+          onchange="toggleTask(${task.id}, this.checked)">
+        <span class="checkmark"></span>
+      </label>
+      <span class="task-title" contenteditable="true"
+        onblur="updateTaskTitle(${task.id}, this.textContent)"
+        onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();}">${escapeHtml(task.title)}</span>
+      <button class="task-delete" onclick="deleteTaskById(${task.id})">✕</button>
+    </li>`;
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+// --- Task Actions ---
+async function handleAddTask(e) {
+  if (e.key !== 'Enter') return;
+  const input = e.target;
+  const title = input.value.trim();
+  if (!title) return;
+  input.value = '';
+  await api('/api/tasks', { method: 'POST', body: { date: currentDate, title } });
+  await loadTasks(currentDate);
+  renderTaskPage();
+  // Re-focus input
+  setTimeout(() => document.getElementById('add-task-input')?.focus(), 50);
+}
+
+async function toggleTask(id, completed) {
+  await api(`/api/tasks/${id}`, { method: 'PUT', body: { completed } });
+  await loadTasks(currentDate);
+  renderTaskPage();
+}
+
+async function updateTaskTitle(id, newTitle) {
+  const title = newTitle.trim();
+  if (!title) return;
+  await api(`/api/tasks/${id}`, { method: 'PUT', body: { title } });
+}
+
+async function deleteTaskById(id) {
+  await api(`/api/tasks/${id}`, { method: 'DELETE' });
+  await loadTasks(currentDate);
+  renderTaskPage();
+}
+
+async function copyTodayToTomorrow() {
+  const result = await api('/api/tasks/copy', {
+    method: 'POST',
+    body: { from_date: todayStr(), to_date: tomorrowStr() }
+  });
+  showToast('Tasks copied to tomorrow!');
+}
+
+// --- Drag & Drop ---
+function initDragAndDrop() {
+  // Touch support for mobile
+  const list = document.getElementById('task-list');
+  if (!list) return;
+
+  let touchDragId = null;
+  let touchClone = null;
+
+  list.addEventListener('touchstart', (e) => {
+    const item = e.target.closest('.task-item');
+    if (!item || e.target.closest('.task-checkbox') || e.target.closest('.task-delete') || e.target.closest('.task-title')) return;
+    touchDragId = parseInt(item.dataset.id);
+    item.classList.add('dragging');
+  }, { passive: true });
+
+  list.addEventListener('touchmove', (e) => {
+    if (!touchDragId) return;
+    const touch = e.touches[0];
+    const el = document.elementFromPoint(touch.clientX, touch.clientY);
+    const item = el?.closest('.task-item');
+    document.querySelectorAll('.task-item').forEach(i => i.classList.remove('drag-over'));
+    if (item && parseInt(item.dataset.id) !== touchDragId) {
+      item.classList.add('drag-over');
+    }
+  }, { passive: true });
+
+  list.addEventListener('touchend', async (e) => {
+    if (!touchDragId) return;
+    const overItem = document.querySelector('.task-item.drag-over');
+    if (overItem) {
+      const overId = parseInt(overItem.dataset.id);
+      await reorderAfterDrop(touchDragId, overId);
+    }
+    document.querySelectorAll('.task-item').forEach(i => {
+      i.classList.remove('dragging', 'drag-over');
+    });
+    touchDragId = null;
+  });
+}
+
+function onDragStart(e, id) {
+  draggedId = id;
+  e.target.classList.add('dragging');
+  e.dataTransfer.effectAllowed = 'move';
+}
+
+function onDragOver(e) {
+  e.preventDefault();
+}
+
+function onDragEnter(e) {
+  const item = e.target.closest('.task-item');
+  if (item) item.classList.add('drag-over');
+}
+
+function onDragLeave(e) {
+  const item = e.target.closest('.task-item');
+  if (item) item.classList.remove('drag-over');
+}
+
+function onDragEnd(e) {
+  document.querySelectorAll('.task-item').forEach(i => {
+    i.classList.remove('dragging', 'drag-over');
+  });
+  draggedId = null;
+}
+
+async function onDrop(e, targetId) {
+  e.preventDefault();
+  if (draggedId === null || draggedId === targetId) return;
+  await reorderAfterDrop(draggedId, targetId);
+}
+
+async function reorderAfterDrop(fromId, toId) {
+  const ids = tasks.map(t => t.id);
+  const fromIdx = ids.indexOf(fromId);
+  const toIdx = ids.indexOf(toId);
+  if (fromIdx === -1 || toIdx === -1) return;
+  ids.splice(fromIdx, 1);
+  ids.splice(toIdx, 0, fromId);
+  await api('/api/tasks/reorder', { method: 'POST', body: { date: currentDate, ordered_ids: ids } });
+  await loadTasks(currentDate);
+  renderTaskPage();
+}
+
+// --- Plan Tomorrow Modal ---
+async function openPlanTomorrow() {
+  const tmrw = tomorrowStr();
+  // If tomorrow has no tasks yet, copy from today
+  let tmrwData = await api(`/api/tasks/${tmrw}`);
+  if (tmrwData.tasks.length === 0) {
+    await api('/api/tasks/copy', { method: 'POST', body: { from_date: todayStr(), to_date: tmrw } });
+    tmrwData = await api(`/api/tasks/${tmrw}`);
+  }
+
+  const modal = document.getElementById('modal');
+  const backdrop = document.getElementById('modal-backdrop');
+
+  modal.innerHTML = `
+    <h2>Plan Tomorrow</h2>
+    <p style="color:var(--text-muted);font-size:14px;margin-bottom:16px;">${formatDateDisplay(tmrw)}</p>
+    <ul class="task-list" id="modal-task-list">
+      ${tmrwData.tasks.map(t => `
+        <li class="task-item" data-id="${t.id}">
+          ${t.carried_over ? '<span class="task-carried-over">🔄</span>' : ''}
+          <span class="task-title" contenteditable="true"
+            onblur="updateModalTaskTitle(${t.id}, this.textContent)"
+            onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();}">${escapeHtml(t.title)}</span>
+          <button class="task-delete" style="opacity:1" onclick="deleteModalTask(${t.id})">✕</button>
+        </li>
+      `).join('')}
+    </ul>
+    <div class="add-task-container">
+      <input type="text" class="add-task-input" placeholder="Add task for tomorrow..."
+        onkeydown="handleModalAddTask(event)">
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeModal()">Close</button>
+    </div>
+  `;
+
+  backdrop.classList.add('open');
+  backdrop.onclick = (e) => { if (e.target === backdrop) closeModal(); };
+}
+
+function closeModal() {
+  document.getElementById('modal-backdrop').classList.remove('open');
+}
+
+async function updateModalTaskTitle(id, title) {
+  await api(`/api/tasks/${id}`, { method: 'PUT', body: { title: title.trim() } });
+}
+
+async function deleteModalTask(id) {
+  await api(`/api/tasks/${id}`, { method: 'DELETE' });
+  openPlanTomorrow(); // refresh modal
+}
+
+async function handleModalAddTask(e) {
+  if (e.key !== 'Enter') return;
+  const title = e.target.value.trim();
+  if (!title) return;
+  e.target.value = '';
+  await api('/api/tasks', { method: 'POST', body: { date: tomorrowStr(), title } });
+  openPlanTomorrow(); // refresh modal
+}
+
+// --- Nav ---
+function renderNav() {
+  return `
+    <nav class="nav">
+      <a href="/" class="nav-brand" onclick="event.preventDefault();navigate('today')">DayFlow</a>
+      <div class="nav-links">
+        <a href="/" class="${currentView === 'today' || currentView === 'tomorrow' ? 'active' : ''}"
+          onclick="event.preventDefault();navigate('today')">Tasks</a>
+        <a href="/history" class="${currentView === 'history' ? 'active' : ''}"
+          onclick="event.preventDefault();navigate('history')">History</a>
+        <a href="/settings" class="${currentView === 'settings' ? 'active' : ''}"
+          onclick="event.preventDefault();navigate('settings')">Settings</a>
+      </div>
+    </nav>`;
+}
+
+// --- Settings ---
+async function renderSettings() {
+  const settings = await api('/api/settings');
+  const app = document.getElementById('app');
+
+  const timezones = [
+    'Asia/Kolkata','America/New_York','America/Chicago','America/Denver','America/Los_Angeles',
+    'Europe/London','Europe/Berlin','Europe/Paris','Asia/Tokyo','Asia/Shanghai',
+    'Australia/Sydney','Pacific/Auckland','Asia/Dubai','Asia/Singapore'
+  ];
+
+  app.innerHTML = `
+    ${renderNav()}
+    <div class="date-header">
+      <h1>Settings</h1>
+      <p class="subtitle">Configure your DayFlow experience</p>
+    </div>
+
+    <div class="settings-card">
+      <h3>Profile</h3>
+      <div class="form-group">
+        <label>Your Name</label>
+        <input type="text" id="set-name" value="${escapeHtml(settings.user_name || '')}">
+      </div>
+      <div class="form-group">
+        <label>Email Address</label>
+        <input type="email" id="set-email" value="${escapeHtml(settings.email || '')}">
+      </div>
+      <div class="form-group">
+        <label>App URL</label>
+        <input type="url" id="set-url" value="${escapeHtml(settings.app_url || '')}" placeholder="https://your-app.railway.app">
+      </div>
+      <div class="form-group">
+        <label>Timezone</label>
+        <select id="set-tz">
+          ${timezones.map(tz => `<option value="${tz}" ${settings.timezone === tz ? 'selected' : ''}>${tz}</option>`).join('')}
+        </select>
+      </div>
+      <button class="btn btn-primary" onclick="saveSettings()">Save Settings</button>
+    </div>
+
+    <div class="settings-card">
+      <h3>Email Reminders</h3>
+      <div class="reminder-row">
+        <label>Morning tasks</label>
+        <input type="time" id="rem-morning-time" value="${settings.reminder_morning_time || '07:00'}">
+        <div class="toggle">
+          <input type="checkbox" id="rem-morning" ${settings.reminder_morning_enabled === 'true' ? 'checked' : ''}>
+          <span class="slider"></span>
+        </div>
+      </div>
+      <div class="reminder-row">
+        <label>Day starting</label>
+        <input type="time" id="rem-start-time" value="${settings.reminder_start_time || '08:00'}">
+        <div class="toggle">
+          <input type="checkbox" id="rem-start" ${settings.reminder_start_enabled === 'true' ? 'checked' : ''}>
+          <span class="slider"></span>
+        </div>
+      </div>
+      <div class="reminder-row">
+        <label>Afternoon check-in</label>
+        <input type="time" id="rem-afternoon-time" value="${settings.reminder_afternoon_time || '15:00'}">
+        <div class="toggle">
+          <input type="checkbox" id="rem-afternoon" ${settings.reminder_afternoon_enabled === 'true' ? 'checked' : ''}>
+          <span class="slider"></span>
+        </div>
+      </div>
+      <div class="reminder-row">
+        <label>Evening wrap-up</label>
+        <input type="time" id="rem-evening-time" value="${settings.reminder_evening_time || '21:00'}">
+        <div class="toggle">
+          <input type="checkbox" id="rem-evening" ${settings.reminder_evening_enabled === 'true' ? 'checked' : ''}>
+          <span class="slider"></span>
+        </div>
+      </div>
+      <div style="margin-top:16px;display:flex;gap:10px;">
+        <button class="btn btn-primary" onclick="saveReminders()">Save Reminders</button>
+        <button class="btn btn-secondary" onclick="sendTestEmail()">Send Test Email</button>
+      </div>
+    </div>
+  `;
+}
+
+async function saveSettings() {
+  await api('/api/settings', {
+    method: 'POST',
+    body: {
+      user_name: document.getElementById('set-name').value,
+      email: document.getElementById('set-email').value,
+      app_url: document.getElementById('set-url').value,
+      timezone: document.getElementById('set-tz').value
+    }
+  });
+  showToast('Settings saved!');
+}
+
+async function saveReminders() {
+  await api('/api/settings', {
+    method: 'POST',
+    body: {
+      reminder_morning_enabled: document.getElementById('rem-morning').checked ? 'true' : 'false',
+      reminder_morning_time: document.getElementById('rem-morning-time').value,
+      reminder_start_enabled: document.getElementById('rem-start').checked ? 'true' : 'false',
+      reminder_start_time: document.getElementById('rem-start-time').value,
+      reminder_afternoon_enabled: document.getElementById('rem-afternoon').checked ? 'true' : 'false',
+      reminder_afternoon_time: document.getElementById('rem-afternoon-time').value,
+      reminder_evening_enabled: document.getElementById('rem-evening').checked ? 'true' : 'false',
+      reminder_evening_time: document.getElementById('rem-evening-time').value
+    }
+  });
+  showToast('Reminders saved!');
+}
+
+async function sendTestEmail() {
+  showToast('Sending test email...');
+  const res = await api('/api/test-email', { method: 'POST' });
+  if (res.ok) {
+    showToast('Test email sent!');
+  } else {
+    showToast('Email failed: ' + (res.error || 'check server logs'));
+  }
+}
+
+// --- History ---
+async function renderHistory() {
+  const app = document.getElementById('app');
+  const year = historyMonth.getFullYear();
+  const month = historyMonth.getMonth();
+  const monthName = historyMonth.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
+
+  // Get first and last day of month
+  const firstDay = new Date(year, month, 1);
+  const lastDay = new Date(year, month + 1, 0);
+  const startStr = `${year}-${String(month+1).padStart(2,'0')}-01`;
+  const endStr = `${year}-${String(month+1).padStart(2,'0')}-${String(lastDay.getDate()).padStart(2,'0')}`;
+
+  const historyData = await api(`/api/history?start=${startStr}&end=${endStr}`);
+  const dataMap = {};
+  historyData.forEach(d => { dataMap[d.date] = d; });
+
+  // Build grid
+  const dayLabels = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  let gridHtml = dayLabels.map(d => `<div class="day-label">${d}</div>`).join('');
+
+  // Empty cells before first day
+  const startDow = firstDay.getDay();
+  for (let i = 0; i < startDow; i++) {
+    gridHtml += '<div class="day-cell empty"></div>';
+  }
+
+  for (let day = 1; day <= lastDay.getDate(); day++) {
+    const dateStr = `${year}-${String(month+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+    const data = dataMap[dateStr];
+    let levelClass = 'no-tasks';
+    let tooltipText = `${day}: No tasks`;
+
+    if (data) {
+      const pct = data.total > 0 ? Math.round((data.done / data.total) * 100) : 0;
+      if (pct === 0) levelClass = 'level-0';
+      else if (pct <= 25) levelClass = 'level-1';
+      else if (pct <= 50) levelClass = 'level-2';
+      else if (pct < 100) levelClass = 'level-3';
+      else levelClass = 'level-4';
+      tooltipText = `${day}: ${data.done}/${data.total} (${pct}%)`;
+    }
+
+    gridHtml += `
+      <div class="day-cell ${levelClass}" onclick="selectHistoryDate('${dateStr}')" title="${tooltipText}">
+        <span class="tooltip">${tooltipText}</span>
+      </div>`;
+  }
+
+  // Detail view
+  let detailHtml = '';
+  if (selectedHistoryDate) {
+    const detail = await api(`/api/tasks/${selectedHistoryDate}`);
+    if (detail.tasks.length > 0) {
+      detailHtml = `
+        <div class="history-detail">
+          <h3>${formatDateDisplay(selectedHistoryDate)}</h3>
+          <p style="color:var(--text-muted);font-size:14px;margin-bottom:12px;">
+            ${detail.stats.done}/${detail.stats.total} completed (${detail.stats.percentage}%)
+          </p>
+          ${detail.tasks.map(t => `
+            <div class="history-task-item ${t.completed ? 'done' : ''}">
+              <span>${t.completed ? '✅' : '⬜'}</span>
+              <span>${escapeHtml(t.title)}</span>
+            </div>
+          `).join('')}
+        </div>`;
+    }
+  }
+
+  app.innerHTML = `
+    ${renderNav()}
+    <div class="date-header">
+      <h1>History</h1>
+      <p class="subtitle">Track your productivity over time</p>
+    </div>
+
+    <div class="month-nav">
+      <button onclick="changeMonth(-1)">← Prev</button>
+      <h2>${monthName}</h2>
+      <button onclick="changeMonth(1)">Next →</button>
+    </div>
+
+    <div class="heatmap-legend">
+      <span>Less</span>
+      <div class="swatch" style="background:#FEE2E2"></div>
+      <div class="swatch" style="background:#FED7AA"></div>
+      <div class="swatch" style="background:#FDE68A"></div>
+      <div class="swatch" style="background:#BBF7D0"></div>
+      <div class="swatch" style="background:#16A34A"></div>
+      <span>More</span>
+    </div>
+
+    <div class="month-grid">${gridHtml}</div>
+    ${detailHtml}
+  `;
+}
+
+function changeMonth(delta) {
+  historyMonth.setMonth(historyMonth.getMonth() + delta);
+  selectedHistoryDate = null;
+  renderHistory();
+}
+
+async function selectHistoryDate(dateStr) {
+  selectedHistoryDate = dateStr;
+  renderHistory();
+}
+
+// --- Setup ---
+function renderSetup() {
+  const app = document.getElementById('app');
+  app.innerHTML = `
+    <div class="setup-container">
+      <h1>DayFlow</h1>
+      <p class="subtitle">Your personal daily task tracker</p>
+
+      <div class="setup-form">
+        <div class="form-group">
+          <label>Your Name</label>
+          <input type="text" id="setup-name" placeholder="Vallabh">
+        </div>
+        <div class="form-group">
+          <label>Email (for reminders)</label>
+          <input type="email" id="setup-email" placeholder="you@example.com">
+        </div>
+        <div class="form-group">
+          <label>Timezone</label>
+          <select id="setup-tz">
+            <option value="Asia/Kolkata" selected>Asia/Kolkata (IST)</option>
+            <option value="America/New_York">America/New_York (EST)</option>
+            <option value="America/Los_Angeles">America/Los_Angeles (PST)</option>
+            <option value="Europe/London">Europe/London (GMT)</option>
+            <option value="Asia/Tokyo">Asia/Tokyo (JST)</option>
+          </select>
+        </div>
+        <button class="btn btn-primary" style="width:100%;margin-top:8px;" onclick="completeSetup()">
+          Get Started →
+        </button>
+      </div>
+    </div>
+  `;
+}
+
+async function completeSetup() {
+  const name = document.getElementById('setup-name').value.trim();
+  const email = document.getElementById('setup-email').value.trim();
+  const tz = document.getElementById('setup-tz').value;
+
+  if (!name || !email) {
+    showToast('Please enter your name and email');
+    return;
+  }
+
+  await api('/api/setup', {
+    method: 'POST',
+    body: { user_name: name, email, timezone: tz }
+  });
+
+  navigate('today');
+}
+
+// --- Init ---
+(async () => {
+  const path = window.location.pathname.slice(1) || 'today';
+  navigate(path);
+})();
+</script>
+</body>
+</html>

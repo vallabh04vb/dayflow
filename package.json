@@ -1,0 +1,20 @@
+{
+  "name": "dayflow",
+  "version": "1.0.0",
+  "description": "Personal daily task tracker with email reminders",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "sql.js": "^1.11.0",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.1",
+    "node-cron": "^3.0.3",
+    "nodemailer": "^6.9.16"
+  }
+}
