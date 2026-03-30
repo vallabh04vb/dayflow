@@ -127,8 +127,13 @@ function createTransporter() {
   }
 
   return nodemailer.createTransport({
-    service: 'gmail',
-    auth: { user, pass }
+    host: 'smtp.gmail.com',
+    port: 587,
+    secure: false,
+    auth: { user, pass },
+    connectionTimeout: 10000,
+    greetingTimeout: 10000,
+    socketTimeout: 15000
   });
 }
 
@@ -205,6 +210,8 @@ async function sendEmail(subject, html) {
     console.warn('[Mailer] No recipient email configured.');
     return;
   }
+
+  console.log(`[Mailer] Attempting to send "${subject}" to ${recipient}...`);
 
   try {
     await transporter.sendMail({
