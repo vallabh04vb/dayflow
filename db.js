@@ -263,6 +263,7 @@ function formatDate(d) {
 }
 
 module.exports = {
+  dbPath,
   initDb,
   getSetting,
   setSetting,

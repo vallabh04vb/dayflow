@@ -151,6 +151,8 @@ app.post('/api/test-email', async (req, res) => {
 // --- Cron Jobs ---
 
 function scheduleCronJobs() {
+  const tz = process.env.TZ || 'Asia/Kolkata';
+
   // Midnight auto-continuation: copy today's tasks to tomorrow if tomorrow is empty
   cron.schedule('5 0 * * *', () => {
     console.log('[Cron] Midnight auto-continuation check');
@@ -161,35 +163,51 @@ function scheduleCronJobs() {
       db.copyTasksToDate(today, tomorrow);
       console.log('[Cron] Copied tasks to tomorrow');
     }
-  });
+  }, { timezone: tz });
 
   // Email reminders — check settings before sending
   cron.schedule('* * * * *', async () => {
     const settings = db.getAllSettings();
+    // Get current time in the configured timezone
     const now = new Date();
-    const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    const timeStr = now.toLocaleTimeString('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false });
+    const currentTime = timeStr; // HH:MM format
+
+    console.log(`[Cron] Tick: ${currentTime} (${tz}) | morning=${settings.reminder_morning_enabled}@${settings.reminder_morning_time} | setup=${!!settings.user_name}`);
 
     if (settings.reminder_morning_enabled === 'true' && currentTime === settings.reminder_morning_time) {
+      console.log('[Cron] Triggering morning email');
       await mailer.sendMorningEmail();
     }
     if (settings.reminder_start_enabled === 'true' && currentTime === settings.reminder_start_time) {
+      console.log('[Cron] Triggering reminder email');
       await mailer.sendReminderEmail();
     }
     if (settings.reminder_afternoon_enabled === 'true' && currentTime === settings.reminder_afternoon_time) {
+      console.log('[Cron] Triggering afternoon email');
       await mailer.sendAfternoonEmail();
     }
     if (settings.reminder_evening_enabled === 'true' && currentTime === settings.reminder_evening_time) {
+      console.log('[Cron] Triggering evening email');
       await mailer.sendEveningEmail();
     }
-  });
+  }, { timezone: tz });
 
-  console.log('[Cron] Scheduled: midnight auto-continuation, email reminders (checking every minute)');
+  console.log(`[Cron] Scheduled with timezone: ${tz}`);
 }
 
 // --- Start ---
 
 (async () => {
   await db.initDb();
+
+  // Startup diagnostics
+  const settings = db.getAllSettings();
+  console.log(`[Boot] DB path: ${require('./db').dbPath || 'loaded'}`);
+  console.log(`[Boot] Setup complete: ${db.isSetupComplete()}`);
+  console.log(`[Boot] User: ${settings.user_name || 'NOT SET'}, Email: ${settings.email || 'NOT SET'}`);
+  console.log(`[Boot] Morning reminder: ${settings.reminder_morning_enabled}@${settings.reminder_morning_time}`);
+
   scheduleCronJobs();
 
   app.listen(PORT, () => {
