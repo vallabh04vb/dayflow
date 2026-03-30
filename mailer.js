@@ -117,25 +117,8 @@ function thoughtBlockHtml(thought, accentColor = '#D97706', bgColor = '#FFFBEB')
     </div>`;
 }
 
-function createTransporter() {
-  const user = process.env.EMAIL_USER;
-  const pass = process.env.EMAIL_PASS;
-
-  if (!user || !pass) {
-    console.warn('[Mailer] EMAIL_USER or EMAIL_PASS not set. Emails disabled.');
-    return null;
-  }
-
-  return nodemailer.createTransport({
-    host: 'smtp.gmail.com',
-    port: 465,
-    secure: true,
-    auth: { user, pass },
-    connectionTimeout: 10000,
-    greetingTimeout: 10000,
-    socketTimeout: 15000
-  });
-}
+// Resend API (HTTP-based, no SMTP needed)
+// Falls back to Gmail SMTP for local development
 
 function getAppUrl() {
   return process.env.APP_URL || 'http://localhost:3000';
@@ -202,9 +185,6 @@ function progressBarHtml(done, total) {
 }
 
 async function sendEmail(subject, html) {
-  const transporter = createTransporter();
-  if (!transporter) return;
-
   const recipient = process.env.RECIPIENT_EMAIL || process.env.EMAIL_USER;
   if (!recipient) {
     console.warn('[Mailer] No recipient email configured.');
@@ -213,16 +193,55 @@ async function sendEmail(subject, html) {
 
   console.log(`[Mailer] Attempting to send "${subject}" to ${recipient}...`);
 
-  try {
-    await transporter.sendMail({
-      from: `"DayFlow" <${process.env.EMAIL_USER}>`,
-      to: recipient,
-      subject,
-      html
-    });
-    console.log(`[Mailer] Sent: ${subject}`);
-  } catch (err) {
-    console.error(`[Mailer] Failed to send "${subject}":`, err.message);
+  const resendKey = process.env.RESEND_API_KEY;
+  if (resendKey) {
+    // Use Resend HTTP API (works on Railway)
+    try {
+      const res = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${resendKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          from: 'DayFlow <onboarding@resend.dev>',
+          to: [recipient],
+          subject,
+          html
+        })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        console.log(`[Mailer] Sent via Resend: ${subject} (id: ${data.id})`);
+      } else {
+        console.error(`[Mailer] Resend error:`, data);
+      }
+    } catch (err) {
+      console.error(`[Mailer] Resend failed:`, err.message);
+    }
+  } else {
+    // Fallback to Gmail SMTP (local dev)
+    const user = process.env.EMAIL_USER;
+    const pass = process.env.EMAIL_PASS;
+    if (!user || !pass) {
+      console.warn('[Mailer] No RESEND_API_KEY or EMAIL_USER/PASS set. Emails disabled.');
+      return;
+    }
+    try {
+      const transporter = nodemailer.createTransport({
+        service: 'gmail',
+        auth: { user, pass }
+      });
+      await transporter.sendMail({
+        from: `"DayFlow" <${user}>`,
+        to: recipient,
+        subject,
+        html
+      });
+      console.log(`[Mailer] Sent via Gmail: ${subject}`);
+    } catch (err) {
+      console.error(`[Mailer] Gmail failed:`, err.message);
+    }
   }
 }
 
