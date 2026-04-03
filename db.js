@@ -246,13 +246,15 @@ function seedDefaultTasks() {
 // --- Helpers ---
 
 function getToday() {
-  return formatDate(new Date());
+  return formatDateTZ(new Date());
 }
 
 function getTomorrow() {
-  const d = new Date();
+  // Get today in the correct timezone, then add a day
+  const todayStr = getToday();
+  const d = new Date(todayStr + 'T12:00:00');
   d.setDate(d.getDate() + 1);
-  return formatDate(d);
+  return formatDateTZ(d);
 }
 
 function formatDate(d) {
@@ -260,6 +262,13 @@ function formatDate(d) {
   const month = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
+}
+
+// Timezone-aware date formatting — always uses configured TZ
+function formatDateTZ(d) {
+  const tz = process.env.TZ || 'Asia/Kolkata';
+  const parts = d.toLocaleDateString('en-CA', { timeZone: tz }); // en-CA gives YYYY-MM-DD
+  return parts;
 }
 
 module.exports = {

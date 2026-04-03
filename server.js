@@ -166,30 +166,45 @@ function scheduleCronJobs() {
   }, { timezone: tz });
 
   // Email reminders — check settings before sending
+  // Track last sent times to prevent duplicate sends
+  const lastSent = {};
+  let cronBusy = false;
+
   cron.schedule('* * * * *', async () => {
-    const settings = db.getAllSettings();
-    // Get current time in the configured timezone
-    const now = new Date();
-    const timeStr = now.toLocaleTimeString('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false });
-    const currentTime = timeStr; // HH:MM format
+    if (cronBusy) {
+      console.log('[Cron] Skipping tick — previous still running');
+      return;
+    }
+    cronBusy = true;
 
-    console.log(`[Cron] Tick: ${currentTime} (${tz}) | morning=${settings.reminder_morning_enabled}@${settings.reminder_morning_time} | setup=${!!settings.user_name}`);
+    try {
+      const settings = db.getAllSettings();
+      const now = new Date();
+      const timeStr = now.toLocaleTimeString('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false });
+      const currentTime = timeStr; // HH:MM format
+      const todayKey = now.toISOString().slice(0, 10); // YYYY-MM-DD
 
-    if (settings.reminder_morning_enabled === 'true' && currentTime === settings.reminder_morning_time) {
-      console.log('[Cron] Triggering morning email');
-      await mailer.sendMorningEmail();
-    }
-    if (settings.reminder_start_enabled === 'true' && currentTime === settings.reminder_start_time) {
-      console.log('[Cron] Triggering reminder email');
-      await mailer.sendReminderEmail();
-    }
-    if (settings.reminder_afternoon_enabled === 'true' && currentTime === settings.reminder_afternoon_time) {
-      console.log('[Cron] Triggering afternoon email');
-      await mailer.sendAfternoonEmail();
-    }
-    if (settings.reminder_evening_enabled === 'true' && currentTime === settings.reminder_evening_time) {
-      console.log('[Cron] Triggering evening email');
-      await mailer.sendEveningEmail();
+      console.log(`[Cron] Tick: ${currentTime} (${tz}) | setup=${!!settings.user_name}`);
+
+      const reminders = [
+        { key: 'morning', enabled: settings.reminder_morning_enabled, time: settings.reminder_morning_time, fn: mailer.sendMorningEmail },
+        { key: 'start', enabled: settings.reminder_start_enabled, time: settings.reminder_start_time, fn: mailer.sendReminderEmail },
+        { key: 'afternoon', enabled: settings.reminder_afternoon_enabled, time: settings.reminder_afternoon_time, fn: mailer.sendAfternoonEmail },
+        { key: 'evening', enabled: settings.reminder_evening_enabled, time: settings.reminder_evening_time, fn: mailer.sendEveningEmail },
+      ];
+
+      for (const r of reminders) {
+        const sentKey = `${r.key}-${todayKey}`;
+        if (r.enabled === 'true' && currentTime === r.time && !lastSent[sentKey]) {
+          console.log(`[Cron] Triggering ${r.key} email`);
+          lastSent[sentKey] = true;
+          await r.fn();
+        }
+      }
+    } catch (err) {
+      console.error('[Cron] Error:', err.message);
+    } finally {
+      cronBusy = false;
     }
   }, { timezone: tz });
 

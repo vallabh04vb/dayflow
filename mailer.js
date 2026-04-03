@@ -121,7 +121,13 @@ function thoughtBlockHtml(thought, accentColor = '#D97706', bgColor = '#FFFBEB')
 // Falls back to Gmail SMTP for local development
 
 function getAppUrl() {
-  return process.env.APP_URL || 'http://localhost:3000';
+  // Check env var first, then DB settings, then fallback
+  if (process.env.APP_URL && process.env.APP_URL !== 'http://localhost:3000') {
+    return process.env.APP_URL;
+  }
+  const { getAllSettings } = require('./db');
+  const settings = getAllSettings();
+  return settings.app_url || process.env.APP_URL || 'https://dayflow-prod.up.railway.app';
 }
 
 function taskListHtml(tasks, showStatus = false) {
